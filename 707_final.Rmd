@@ -1,0 +1,1213 @@
+---
+title: "Housing Price Regression"
+author: "Ronen Reouveni"
+date: "9/10/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Real estate markets have long been dominated by real estate agents making decisions about the value of a property. Although agents often base their estimates on comps, the dollar amount a property was sold for near to the one in question, the process can be arbitrary. It is very difficult in this setting for a human to ascertain how much an additional bathroom will add in value. Or how much a corner home vs street home will differ in cost. Often times it is not possible to find a comparison property that is similar to the property in question.  This leads to properties being sold and/or purchased for amounts that are potentially significantly different to their true value. These discrepancies are part of the reason that a very experienced investor can find properties that are undervalued. They are able to notice and understand when a listed price is not taking into consideration some underlying benefit a property has compared to how it is priced. Furthermore, buyers can easily lose money by overspending because a comparison property was in fact better than the property they purchased for the same price. There is a need for a more consistent approach to predicting a properties sale value. 
+
+Improving how properties are priced has many benefits. Stakeholders include buyers, sellers, real estate agents, and investors. However, the manner in which a solution is implemented may benefit some parties more than others. For example, if one party had the true value and the others did not they could easily exploit this. From a buyer's perspective, knowing the true value would allow a party to easily hone in on properties that are undervalued and avoid properties that are overvalued. From a seller's perspective they would know what a fair price would be for the property. Furthermore, there is the situation in which everyone will have access to this information. One of the most beneficial uses for a real estate agent is pricing the home. If this becomes obsolete due to technological advances then a key real estate agent skill is no longer needed. They will only be beneficial for writing offers and finding the properties to begin with. A critical point of any technological innovation is who will have access to it and who will not. 
+
+There is a significant opportunity for technology to make drastic improvements to this problem. Zillow, an online real estate firm, now gives an estimate range for the value of a home. Not coincidentally, this estimate is more often than not the listed price of the property. There are many other companies leveraging analytics to estimate the value of a home. Some of these firms are focused on investors. For example, finding undervalued properties and purchasing them. Then they allow high net worth investors to buy pieces of a real estate portfolio. However, there is still a large need for this to be improved. As technology and innovation improve, the accuracy of sophisticated housing price predictions also improves. Competitive models should be available to be used by simple buyers and sellers. Facilitating more honesty in the real estate market will only help bring about positive change in how deals are made and property changes hands. 
+
+```{r cars}
+library(randomForest)
+library(Metrics)
+library(randomForestExplainer)
+library(xgboost)
+library(randomcoloR)
+library(FactoMineR)
+library(MASS)
+library(plyr)
+library(ade4)
+library(arules)
+library(arulesCBA)
+library(e1071)
+library(reshape2)
+library(corrplot)
+library(ggpubr)
+library(polycor)
+library(robustHD)
+library(kernlab)
+library(Rfast)
+library(glmnet)
+library(rpart)
+library(rattle)
+library(factoextra)
+library(curl)
+library(cluster)
+library(wordspace)
+library(dendextend)
+library(FNN)
+library(arulesViz)
+library(klaR)
+library(packcircles)
+```
+
+# Analysis and Models
+
+## About the Data
+
+The data consists of information on homes sold in various neighborhoods in Iowa. The data contains 1,460 rows of observations that contain the sale price and 1,459 that do not. These two files are combined so that data pre-processing is applied to all observations. The final submission to Kaggle is the sale price for the 1,459 observations where the sale price was not given. The data starts with 79 predictors and about 14,000 missing values. The Kaggle competition for this data set is measured in root mean squared log error, rmsle, and therefore that is the metric that will be used for evaluation. 
+
+
+```{r load data, echo=TRUE}
+#set seed for reproducabiliy and load data 
+set.seed(5948)
+housingData <- read.csv("/Users/ronenreouveni/Desktop/projData/train.csv")
+housingData_test <- read.csv("/Users/ronenreouveni/Desktop/projData/test.csv")
+
+#remove ID and bring sale price into its own vector 
+housingData <- housingData[,-1]
+targetValue <- housingData$SalePrice
+housingData <- housingData[,-which(colnames(housingData)=='SalePrice')]
+housingData_test <- housingData_test[,-1]
+
+#combine both data files into one data frame to facilitate pre processing 
+fullFrame <- rbind(housingData,housingData_test)
+```
+
+
+The unique function can be used to get an idea of the data and also find any values that do not belong. 
+
+```{r explore data, echo=TRUE}
+#check for mistakes and get a sense 
+unique(fullFrame$MSSubClass)
+unique(fullFrame$OverallQual)
+unique(fullFrame$OverallCond)
+unique(fullFrame$BedroomAbvGr)
+unique(fullFrame$TotRmsAbvGrd)
+unique(fullFrame$Fireplaces)
+unique(fullFrame$FullBath)
+unique(fullFrame$GarageCars)
+unique(fullFrame$BsmtFullBath)
+unique(fullFrame$BsmtHalfBath)
+unique(fullFrame$HalfBath)
+unique(fullFrame$KitchenAbvGr)
+table(fullFrame$Neighborhood)
+
+#load factors as factors 
+fullFrame$MSSubClass <- as.factor(fullFrame$MSSubClass)
+fullFrame$OverallQual <- as.factor(fullFrame$OverallQual)
+fullFrame$OverallCond <- as.factor(fullFrame$OverallCond)
+fullFrame$BedroomAbvGr <- as.factor(fullFrame$BedroomAbvGr)
+fullFrame$TotRmsAbvGrd <- as.factor(fullFrame$TotRmsAbvGrd)
+fullFrame$Fireplaces <- as.factor(fullFrame$Fireplaces)
+fullFrame$FullBath <- as.factor(fullFrame$FullBath)
+fullFrame$GarageCars <- as.factor(fullFrame$GarageCars)
+fullFrame$BsmtFullBath <- as.factor(fullFrame$BsmtFullBath)
+fullFrame$BsmtHalfBath <- as.factor(fullFrame$BsmtHalfBath)
+fullFrame$HalfBath <- as.factor(fullFrame$HalfBath)
+fullFrame$BedroomAbvGr <- as.factor(fullFrame$BedroomAbvGr)
+fullFrame$KitchenAbvGr <- as.factor(fullFrame$KitchenAbvGr) 
+```
+
+
+
+```{r time data, echo=TRUE}
+#make sure all years are present and month sold is 12 months 
+unique(fullFrame$YrSold)
+unique(fullFrame$MoSold)
+
+#make sure year built/remod all makes sense 
+summary(fullFrame$YearBuilt)
+summary(fullFrame$YearRemodAdd)
+
+#notice one value is 2207
+summary(fullFrame$GarageYrBlt)
+
+#assume its 2007
+fullFrame$GarageYrBlt[which(fullFrame$GarageYrBlt>2011)] <- 2007
+summary(fullFrame$GarageYrBlt)
+
+
+#Make time variables factors 
+fullFrame$YearRemodAdd <- as.factor(fullFrame$YearRemodAdd)
+fullFrame$YrSold <- as.factor(fullFrame$YrSold)
+fullFrame$MoSold <- as.factor(fullFrame$MoSold)
+fullFrame$YearBuilt <- as.factor(fullFrame$YearBuilt)
+fullFrame$GarageYrBlt <- as.factor(as.character(fullFrame$GarageYrBlt))
+```
+
+The following time-based predictors have two many values to leave in as a factor; it will have too many levels. 
+Therefore, discretization is used.
+
+```{r disc data, echo=TRUE}
+#discretize time based entries with many values 
+fullFrame$YearBuilt <- discretize(as.numeric(as.character(fullFrame$YearBuilt)), breaks = 10)
+fullFrame$YearRemodAdd <- suppressWarnings(discretize(
+                            as.numeric(as.character(fullFrame$YearRemodAdd)), 
+                            breaks = 10))
+fullFrame$GarageYrBlt <- discretize(as.numeric(as.character(fullFrame$GarageYrBlt)), breaks = 10)
+```
+
+Simple function to give the number of missing values per predictor. 
+
+```{r find missing, echo=TRUE}
+#lets see how many NA's we are dealing with 
+findMissing <- function(x) {
+  i <- 1
+  while (i < ncol(x)+1){
+    print(paste(colnames(x)[i],length(x[,i][!complete.cases(x[,i])])))
+    i <- i + 1
+  }
+}
+
+findMissing(fullFrame)
+```
+
+
+Many of the missing values have meaning. According to the data dictionary majority of NA's indicate zero or none. 
+However, many are truly NA's where the value is unknown. One of the largest is Lot Frontage. Instead of arbitrarily filling in the missing values or even using the median value for each neighborhood it is possible to use machine learning. 
+
+Naive Bayes will be used to fill in the missing Lot Frontage values. Lot Frontage is first discretized then Naive Bayes is used to predict which bucket a missing value would fall into. The median value of the predicted bucket is then used to fill in the missing value. 
+
+486 missing Lot Frontage values are replaced with this process.
+
+```{r Lot Frontage, echo=TRUE}
+#remove NA columns to simplify 
+fullFrame_NA1 <- fullFrame[,-c(which(colnames(fullFrame)=="FireplaceQu")
+                               ,which(colnames(fullFrame)=="PoolQC")
+                               ,which(colnames(fullFrame)=="Fence")  
+                               ,which(colnames(fullFrame)=="MiscFeature")  
+                               ,which(colnames(fullFrame)=="PoolArea") 
+                               ,which(colnames(fullFrame)=="Alley") 
+)]
+
+
+sum(is.na(fullFrame$LotFrontage))
+#Use NB to fill missing Lot Frontage values 
+fullFrame_NA1$LotFrontage <- discretize(fullFrame_NA1$LotFrontage, breaks = 10)
+NBfullFrame <- fullFrame_NA1
+fullFrame_NA1 <- suppressWarnings(discretizeDF(fullFrame_NA1))
+
+#NaiveBayes replacement method 
+nbaLots <- naiveBayes(LotFrontage ~ ., data = fullFrame_NA1)
+
+
+#Predict values and revalue levels 
+NBApreds <- predict(nbaLots, fullFrame_NA1[which(is.na(fullFrame_NA1$LotFrontage)),])
+NBApreds <- revalue(NBApreds, c("[21,43)" = 32, "[43,53)"= 48, "[53,60)"=56,
+                                "[60,63)"=62, "[63,68)"=65,
+                                "[68,73)"= 70, "[73,78)"=76 ,'[78,84)'=83,
+                                '[84,95)'=90, '[95,313]' = 100))
+NBApreds <- as.numeric(levels(NBApreds))[NBApreds]
+
+#get indicies of missing locations 
+lfNA <- which(is.na(fullFrame$LotFrontage))
+
+#use a loop to fill in the missing values
+k <- 1
+for (i in lfNA) {
+  fullFrame$LotFrontage[i] <- NBApreds[k]
+  k <- k + 1
+}
+
+#There are no more NA's
+sum(is.na(fullFrame$LotFrontage))
+```
+
+The model is trained again to show some visualizations. Three mosaic plots are shown, one for GrLivArea, one for LotArea, and one for Neighborhood. All of these are the discretized versions. 
+
+```{r Lot Frontage Viz, echo=TRUE,fig.align = 'center'}
+nbViz <- NaiveBayes(LotFrontage ~ GrLivArea + LotArea + Neighborhood, 
+                    data = fullFrame_NA1, usekernel = TRUE)
+plot(nbViz,las = 1 )
+```
+
+
+Identifying which columns are numeric and which are categorical is essential for upcoming pre processing and visualization. 
+
+```{r split, echo=TRUE}
+#split dataframe by type 
+ints <- c()
+cats <- c()
+for (i in 1:ncol(fullFrame)) {
+  ifelse((is.numeric(fullFrame[,i])) ,ints[i] <- i ,cats[i] <- i)
+}
+
+ints <- sort(ints)
+cats <- sort(cats)
+```
+
+
+Fill in remaining NA's with the mode. 
+
+```{r fills, echo=TRUE}
+#simple function to find mode 
+modeFunc <- function(x) {
+  uni <- unique(x)
+  uni[which.max(tabulate(match(x, uni)))]
+}
+
+#fill wiht obvious value 
+fullFrame$Functional[is.na(fullFrame$Functional)] <- 'Typ'
+fullFrame$Electrical[is.na(fullFrame$Electrical)] <- 'SBrkr'
+fullFrame$KitchenQual[is.na(fullFrame$KitchenQual)] <- 'TA'
+
+#use mode function to fill 
+fullFrame$Exterior1st[is.na(fullFrame$Exterior1st)] <- modeFunc(fullFrame$Exterior1st)
+fullFrame$Exterior2nd[is.na(fullFrame$Exterior2nd)] <- modeFunc(fullFrame$Exterior2nd)
+fullFrame$SaleType[is.na(fullFrame$SaleType)] <- modeFunc(fullFrame$SaleType)
+
+#fill missing garage area with 0 
+fullFrame$GarageArea[is.na(fullFrame$GarageArea)] <- 0
+
+
+#replace missing zoning values by mode grouped by neighberhood
+moveFrame <- aggregate(fullFrame$MSZoning, by=list(Neighborhood=fullFrame$Neighborhood), 
+                       FUN=modeFunc)
+fullFrame <- join(fullFrame, moveFrame, by = 'Neighborhood')
+fullFrame$MSZoning[is.na(fullFrame$MSZoning)] <- fullFrame$x[is.na(fullFrame$MSZoning)]
+
+#remove the added redundent column 
+fullFrame <- fullFrame[,-ncol(fullFrame)]
+```
+
+According to the data dictionary the remaining missing values are all truly 0 or none. 
+For example, NA for fence means there is no fence on the property. 
+Two simple for loops are able to fill in the rest of the missing values with 0 or none. 
+
+```{r keep filling, echo=TRUE}
+for (i in ints) {
+  fullFrame[which(is.na(fullFrame[,i])),i] <- 0
+}
+
+for (i in cats) {
+  fullFrame[,i] <- as.character(fullFrame[,i])
+  fullFrame[which(is.na(fullFrame[,i])),i] <- 'none'
+  fullFrame[,i] <- as.factor(fullFrame[,i])
+}
+
+sum(is.na(fullFrame))
+```
+
+
+Next, select variables are chosen to plot against sale price. This led to the discovery of many outliers but in all cases removing them only lowered the accuracy. 
+
+```{r keep Vizs, echo=TRUE}
+
+#resplit the data frame 
+ints <- c()
+cats <- c()
+for (i in 1:ncol(fullFrame)) {
+  ifelse((is.numeric(fullFrame[,i])) ,ints[i] <- i ,cats[i] <- i)
+}
+
+ints <- sort(ints)
+cats <- sort(cats)
+
+#create new dataframe with only the target value containing values 
+fullFrame_GraphScat <- cbind(fullFrame[1:length(targetValue),ints], targetValue)
+
+a <- ggplot(fullFrame_GraphScat, aes(x=GrLivArea, y=(targetValue))) + 
+  geom_point()
+
+b <- ggplot(fullFrame_GraphScat, aes(x=GarageArea, y=(targetValue))) + 
+  geom_point()
+
+e <- ggplot(fullFrame_GraphScat, aes(x=LotFrontage, y=(targetValue))) + 
+  geom_point()
+
+f <- ggplot(fullFrame_GraphScat, aes(x=LotArea, y=(targetValue))) + 
+  geom_point()
+
+h <- ggplot(fullFrame_GraphScat, aes(x=MasVnrArea, y=(targetValue))) + 
+  geom_point()
+
+i <- ggplot(fullFrame_GraphScat, aes(x=BsmtFinSF1, y=(targetValue))) + 
+  geom_point()
+
+j <- ggplot(fullFrame_GraphScat, aes(x=TotalBsmtSF, y=(targetValue))) + 
+  geom_point()
+
+k <- ggplot(fullFrame_GraphScat, aes(x=X1stFlrSF, y=(targetValue))) + 
+  geom_point()
+
+l <- ggplot(fullFrame_GraphScat, aes(x=X2ndFlrSF, y=(targetValue))) + 
+  geom_point()
+
+#display the viz
+ggarrange(a,b,e,f,h,i,j,k,l)
+```
+
+To check that there are not major differences between the Kaggle train and test data a Random Forest is used to compare the two sets. A label is added to each data set indicating which set it comes from. Then a Random Forest is used to try and predict which set an observation comes from. If this can be done with a high accuracy then there are major differences between the two sets. 
+
+Since the accuracy of this classification model is only 50% it means that the two data sets are similar. 
+Although the model cannot predict which data set an observation comes from importance can still be visualized. If there was an issue this would illuminate which predictors were responsible. 
+
+This model is used in the pre-processing section because it drives if more pre-processing is needed to correct the issue between the two data sets. Once it is confirmed that there is no issue, feature engineering is safely possible and then moving on to using models to predict sales price. 
+```{r rf comparison, echo=TRUE}
+#This shows that the data comes from the same distribution, 
+#otherwise a RF could classify better than 50/50
+dataTrain <- fullFrame[1:length(targetValue),]
+dataTest <- fullFrame[(length(targetValue)+1):nrow(fullFrame),]
+dataTrain$labs <- rep(0, nrow(dataTrain))
+dataTest$labs <- rep(1, nrow(dataTest))
+dataFull <- rbind(dataTrain, dataTest)
+dataFull$labs <- as.factor(dataFull$labs)
+idx <- sample(1:nrow(dataFull), .25*nrow(dataFull))
+rfComps <- randomForest(dataFull[idx,-ncol(dataFull)], dataFull$labs[idx])
+predsComp <- predict(rfComps, dataFull[-idx,-ncol(dataFull)])
+table(predsComp, dataFull$labs[-idx])
+mean(predsComp == dataFull$labs[-idx])
+
+varImpPlot(rfComps, sort = TRUE, cex = .85)
+```
+
+
+13 new features were created to improve the models. 
+
+1. TotalSf: the sum of all square foot predictors 
+2. T_bathrooms: the total number of bathrooms in a home 
+3. Tot_out: the total outside deck and porch area 
+4. Sf_Quality: an interaction between TotalSf and Quality 
+5. lotSizeRatio: TotalSf / by LotArea
+6. QualCond: interaction between Quality and Condition 
+7. Price_sf: an interaction of median price / square foot in each neighborhood and overall quality 
+8. Price_SF_land: median price / square foot of land in each neighborhood 
+9. Price_SF_land_: an interaction of median price / square foot of land in each neighborhood and overall quality 
+10. Is_pool: binary value if there is a pool 
+11. Is_2stories: binary value if there is 2 stories 
+12. Is_garage: binary value if there is a garage 
+13. Is_bsmt: binary value if there is a basement  
+  
+  
+    
+```{r feature engineering, echo=TRUE}
+
+ncol(fullFrame)
+fullFrame$TotalSf <- fullFrame$TotalBsmtSF + fullFrame$X1stFlrSF + fullFrame$X2ndFlrSF
+
+fullFrame$T_bathrooms <- as.numeric(fullFrame$FullBath) + 
+                        .5*as.numeric(fullFrame$HalfBath) + 
+                          as.numeric(fullFrame$BsmtFullBath) + 
+                          .5*as.numeric(fullFrame$BsmtHalfBath)
+fullFrame$T_bathrooms <- as.factor(fullFrame$T_bathrooms)
+
+fullFrame$Tot_out <- fullFrame$WoodDeckSF + fullFrame$OpenPorchSF + fullFrame$EnclosedPorch + 
+                          fullFrame$X3SsnPorch + fullFrame$ScreenPorch
+
+
+fullFrame$Sf_Quality <-fullFrame$TotalSf^as.integer(fullFrame$OverallQual)
+
+fullFrame$lotSizeRatio <-fullFrame$TotalSf/fullFrame$LotArea
+
+fullFrame$QualCond <- as.integer(fullFrame$OverallCond)^as.integer(fullFrame$OverallQual)
+
+Price_SF <- as.numeric((targetValue))/(fullFrame$GrLivArea[1:length(targetValue)])
+buildData <- data.frame(fullFrame$Neighborhood[1:length(targetValue)], Price_SF)
+priceKey <- as.data.frame(tapply(buildData$Price_SF,
+                                 buildData$fullFrame.Neighborhood.1.length.targetValue.., median))
+priceKey <- cbind(priceKey, rownames(priceKey))
+colnames(buildData) <- c("1",'2')
+colnames(priceKey) <- c("2", "Neighborhood")
+fullFrame_intermediate <- join(fullFrame,priceKey, by="Neighborhood")
+fullFrame$P_sf <- fullFrame_intermediate[,ncol(fullFrame_intermediate)]
+fullFrame$P_sf <- fullFrame$P_sf*as.integer(fullFrame$OverallQual)
+
+
+Price_SF_land <- as.numeric((targetValue[1:length(targetValue)]
+                             ))/(fullFrame$LotArea[1:length(targetValue)])
+buildData <- data.frame(fullFrame$Neighborhood[1:length(targetValue)], Price_SF_land)
+priceKey <- as.data.frame(tapply(buildData$Price_SF_land,
+                                 buildData$fullFrame.Neighborhood.1.length.targetValue.., median))
+priceKey <- cbind(priceKey, rownames(priceKey))
+colnames(buildData) <- c("1",'2')
+colnames(priceKey) <- c("2", "Neighborhood")
+fullFrame_intermediate <- join(fullFrame,priceKey, by="Neighborhood")
+fullFrame$Price_SF_land <- fullFrame_intermediate[,ncol(fullFrame_intermediate)]
+
+fullFrame$Price_SF_land_ <- fullFrame$Price_SF_land^as.integer(fullFrame$OverallQual)
+
+fullFrame$Is_pool <- as.factor(ifelse(fullFrame$PoolArea > 0, 1, 0))
+
+fullFrame$Is_2stories <- as.factor(ifelse(fullFrame$X2ndFlrSF > 0, 1, 0))
+
+fullFrame$Is_garage <- as.factor(ifelse(fullFrame$GarageArea > 0, 1, 0))
+
+fullFrame$Is_bsmt <- as.factor(ifelse(fullFrame$TotalBsmtSF > 0, 1, 0))
+ncol(fullFrame)
+```
+
+
+
+There are some highly skewed predictors and taking the log1p of these predictors improved accuracy. A histogram of Lot Area before and after the transformation highlights how well the skewness is improved. 
+The log1p is used because there are so many instances of 0. 
+
+```{r logging , echo=TRUE}
+hist(fullFrame$LotArea)
+
+fullFrame$LowQualFinSF <- log1p(fullFrame$LowQualFinSF)
+fullFrame$LotArea <- log1p(fullFrame$LotArea)
+fullFrame$BsmtFinSF2 <- log1p(fullFrame$BsmtFinSF2)
+fullFrame$ScreenPorch <- log1p(fullFrame$ScreenPorch)
+fullFrame$X3SsnPorch <- log1p(fullFrame$X3SsnPorch)
+fullFrame$EnclosedPorch <- log1p(fullFrame$EnclosedPorch)
+fullFrame$MasVnrArea <- log1p(fullFrame$MasVnrArea)
+fullFrame$OpenPorchSF <- log1p(fullFrame$OpenPorchSF)
+fullFrame$WoodDeckSF <- log1p(fullFrame$WoodDeckSF)
+fullFrame$LotFrontage <- log1p(fullFrame$LotFrontage)
+fullFrame$X1stFlrSF <- log1p(fullFrame$X1stFlrSF)
+
+hist(fullFrame$LotArea)
+```
+
+The correlation matrix highlights the fact that there is a high correlation between predictors. This means that models that handle multicollinearity well should be used in the final predictions. 
+
+```{r cores , echo=TRUE}
+#Resplit the data frame 
+ints <- c()
+cats <- c()
+for (i in 1:ncol(fullFrame)) {
+  ifelse((is.numeric(fullFrame[,i])) ,ints[i] <- i ,cats[i] <- i)
+}
+
+ints <- sort(ints)
+cats <- sort(cats)
+
+intGraphs <- cbind(fullFrame[1:length(targetValue),ints], targetValue)
+
+#correlations
+cores <- cor(intGraphs)
+corrplot(cores, method="circle")
+```
+
+
+Sale price is much more normal after taking log1p. 
+
+```{r targs , echo=TRUE}
+hist(targetValue)
+targetValue <- log1p(targetValue)
+hist(targetValue)
+```
+  
+
+At this point the pre-processing is completed. All missing values are filled, all transformations are made and all new features are engineered. These bubble plots highlight how the data changes when looking at sale price. It is very easy to see which neighborhoods are the highest value and which are the lowest. The neighborhood visualization in particular shows that while there are large differences between some neighborhoods, like NoRidge and Edwards. Many neighborhoods are very similar like Blueste and BrkSide. 
+
+
+```{r niceViz , echo=TRUE}
+#https://www.r-graph-gallery.com/305-basic-circle-packing-with-one-level.html
+Alldata <- data.frame(group = fullFrame$Neighborhood[1:1460],value = expm1(targetValue))
+groupings <- data.frame(tapply(Alldata$value,Alldata$group,  mean))
+data <- cbind(groupings, rownames(groupings))
+colnames(data) <- c('value', 'group')
+rownames(data) <- NULL
+packing <- circleProgressiveLayout(data$value, sizetype='area')
+data <- cbind(data, packing)
+dat.gg <- circleLayoutVertices(packing, npoints=50)
+# Make the plot
+ggplot() + 
+  # Make the bubbles
+  geom_polygon(data = dat.gg, aes(x, y, group = id, fill=as.factor(id)), colour = "black", alpha = 0.6) +
+  # Add text in the center of each bubble + control its size
+  geom_text(data = data, aes(x, y,  label = group)) +
+  scale_size_continuous(range = c(1,4)) +
+  # General theme:
+  theme_void() + 
+  theme(legend.position="none") +
+  ggtitle('Mean price by neighborhood') +
+  coord_equal()
+
+Alldata <- data.frame(group = fullFrame$T_bathrooms[1:1460],value = expm1(targetValue))
+groupings <- data.frame(tapply(Alldata$value,Alldata$group,  mean))
+data <- cbind(groupings, rownames(groupings))
+colnames(data) <- c('value', 'group')
+rownames(data) <- NULL
+packing <- circleProgressiveLayout(data$value, sizetype='area')
+data <- cbind(data, packing)
+dat.gg <- circleLayoutVertices(packing, npoints=50)
+# Make the plot
+ggplot() + 
+  # Make the bubbles
+  geom_polygon(data = dat.gg, aes(x, y, group = id, fill=as.factor(id)), colour = "black", alpha = 0.6) +
+  # Add text in the center of each bubble + control its size
+  geom_text(data = data, aes(x, y, label = group)) +
+  scale_size_continuous(range = c(1,4)) +
+  # General theme:
+  theme_void() + 
+  theme(legend.position="none") +
+  ggtitle('Mean price by number of bathrooms') +
+  coord_equal()
+
+
+Alldata <- data.frame(group = fullFrame$Fireplaces[1:1460],value = expm1(targetValue))
+groupings <- data.frame(tapply(Alldata$value,Alldata$group,  mean))
+data <- cbind(groupings, rownames(groupings))
+colnames(data) <- c('value', 'group')
+rownames(data) <- NULL
+packing <- circleProgressiveLayout(data$value, sizetype='area')
+data <- cbind(data, packing)
+dat.gg <- circleLayoutVertices(packing, npoints=50)
+# Make the plot
+ggplot() + 
+  # Make the bubbles
+  geom_polygon(data = dat.gg, aes(x, y, group = id, fill=as.factor(id)), colour = "black", alpha = 0.6) +
+  # Add text in the center of each bubble + control its size
+  geom_text(data = data, aes(x, y, label = group)) +
+  scale_size_continuous(range = c(1,4)) +
+  # General theme:
+  theme_void() + 
+  theme(legend.position="none") +
+  ggtitle('Mean price by number of fireplaces') +
+  coord_equal()
+
+Alldata <- data.frame(group = fullFrame$YearBuilt[1:1460],value = expm1(targetValue))
+groupings <- data.frame(tapply(Alldata$value,Alldata$group,  mean))
+data <- cbind(groupings, rownames(groupings))
+colnames(data) <- c('value', 'group')
+rownames(data) <- NULL
+packing <- circleProgressiveLayout(data$value, sizetype='area')
+data <- cbind(data, packing)
+dat.gg <- circleLayoutVertices(packing, npoints=50)
+# Make the plot
+ggplot() + 
+  # Make the bubbles
+  geom_polygon(data = dat.gg, aes(x, y, group = id, fill=as.factor(id)), colour = "black", alpha = 0.6) +
+  # Add text in the center of each bubble + control its size
+  geom_text(data = data, aes(x, y, label = group)) +
+  scale_size_continuous(range = c(1,4)) +
+  # General theme:
+  theme_void() + 
+  theme(legend.position="none") +
+  ggtitle('Mean price by year built') +
+  coord_equal()
+```
+  
+## Models 
+
+***Association Rule Mining***
+
+Association Rule Mining is able to find rules within the data. These rules highlight various patterns. A new data frame is created to mine for association rules. Columns need to be removed to avoid redundant rules. For example, GarageCars needs to be removed because without doing so a frequent and strong rule is GarageCars being 0 means GarageArea will be 0. Since this is trivial certain predictors are removed to avoid this. Sale price is discretized into three buckets. Low, medium, and high value homes. The data frame is then converted into transactions. First the algorithm mines for general rules and the top 10 rules for lift, confidence, and support are shown. Association Rule Mining is then used to find patterns that dictate which one of those buckets will an observation fall into. Sorting those rules by support gave the most interesting rules and those are the ones that are visualized. 
+
+```{r ARM , echo=TRUE}
+armTransition <- fullFrame[,-c(89,90,91,92
+                               ,which(colnames(fullFrame)=="GarageFinish")
+                               ,which(colnames(fullFrame)=="GarageCars")
+                               ,which(colnames(fullFrame)=="GarageQual")
+                               ,which(colnames(fullFrame)=="GarageCond")
+                               ,which(colnames(fullFrame)=="GarageYrBlt")
+                                ,which(colnames(fullFrame)=="MSSubClass")
+                                ,which(colnames(fullFrame)=="SaleType")
+)]
+
+armTransition <- armTransition[1:1460,]
+armTransition$targs <- targetValue
+armTransition$targs <- discretize(armTransition$targs, breaks = 3, labels = c('low', 'medium', 'high'))
+armFrame <- suppressWarnings(as(armTransition, "transactions"))
+
+
+rules_1 <- apriori(armFrame,
+                   parameter = list(support=.25, confidence=.99, minlen = 3),
+                   control=list(verbose = FALSE))
+
+high_support <- sort(rules_1, by="support", decreasing=TRUE)
+inspect(head(high_support,10))
+
+high_lift <- sort(rules_1, by="lift", decreasing=TRUE)
+inspect(head(high_lift,10))
+
+high_conf <- sort(rules_1, by="confidence", decreasing=TRUE)
+inspect(head(high_conf,10))
+
+
+
+
+rulesTargs <- apriori(armFrame, parameter = list(support=.035, confidence = 1),
+                       control=list(verbose = FALSE),
+                  appearance = list(rhs = c('targs=low','targs=medium','targs=high')))
+
+
+
+rules_lift <- sort(rulesTargs, by="lift", decreasing=TRUE)
+inspect(head(rules_lift,10))
+
+rules_supp <- sort(rulesTargs, by="support", decreasing=TRUE)
+inspect(head(rules_supp,10))
+
+rules_conf <- sort(rulesTargs, by="confidence", decreasing=TRUE)
+inspect(head(rules_conf,10))
+
+
+
+plot(rules_supp[1:75])
+plot(rules_supp[1:5], method="paracoord", control=list(reorder=TRUE))
+plot(rules_supp[1:5],method="graph",shading="confidence")
+plot(rules_supp[1:5], method="graph", control=list(layout=igraph::in_circle()))
+```
+
+
+
+***Support Vector Regression***
+
+Support Vector Machine will attempt to find linear separability between observations. This section features a custom recursive cost tuning algorithm. It recursively passes in a vector of costs that are around the previous rounds best cost. It repeats this process until the same cost has been selected twice in a row or it has tried 25 costs. The function also creates a visualization of different costs and their respective error rate. A large benefit is being able to call this custom function and also pass in various kernels and regression types. Vanilladot, or the linear kernel, radial kernel, and laplacedot kernel are all tuned. The best is selected by using cross validation with optimal cost selected. 
+
+```{r SVM , echo=TRUE}
+svmFrame <- cbind(fullFrame[1:length(targetValue),], targetValue)
+svmTestFrame <- fullFrame[(length(targetValue)+1):nrow(fullFrame),]
+
+
+indexes <- sample(1:length(targetValue), .75*length((1:length(targetValue))))
+
+#taken from hadley wickam
+quiet <- function(x) { 
+  sink(tempfile()) 
+  on.exit(sink()) 
+  invisible(force(x)) 
+} 
+
+#function that tunes cost, takes a starting cost value, kernel, and type 
+FinetuneKSVMcost <- function(values, kern, svmType = 'eps-svr') {
+  set.seed(5948)
+  if (length(values) == 1) {
+    track <- c()
+    cost <- c()
+    track2 <- c()
+  }
+  scoreVector <- c()
+  for (i in values) {
+    ksvmModel <- quiet(ksvm(x = targetValue ~ .,data = svmFrame[indexes,], kernel = kern, C = i, type = svmType , scale = T))
+    preds_ <- predict(ksvmModel,svmFrame[-indexes,])
+    preds <- expm1(preds_)
+    test3 <- expm1(targetValue[-indexes])
+    scoreNow <- rmsle(preds ,test3)
+    scoreVector <- c(scoreVector,scoreNow)
+  }
+  curr <- values[which.min(scoreVector)]
+  newCosts <- seq(curr*.5, curr*1.5, curr/10)
+  cost <<- c(cost, values)
+  track2 <<- c(track2, scoreVector)
+  track <<- c(track, values[which.min(scoreVector)])
+  if (length(track)>2) {
+    if (length(unique(track)) != length(track) || length(track)>25) {
+      final <- c(values[which.min(scoreVector)], scoreVector[which.min(scoreVector)])
+      df <- data.frame(cost,track2)
+      df <- df[order(track2),]
+      plot(df$cost, df$track2, main = paste('cost vs error', kern))
+      return(final)
+    }
+  }
+  FinetuneKSVMcost(newCosts, kern, svmType)
+}
+
+fineCost <- FinetuneKSVMcost(.1, 'vanilladot') 
+fineCost2 <- FinetuneKSVMcost(.1, 'rbfdot')  
+fineCost6 <- FinetuneKSVMcost(30, 'laplacedot') 
+fineCostype_1 <- FinetuneKSVMcost(30, 'laplacedot', 'eps-bsvr') 
+fineCostype_2 <- FinetuneKSVMcost(30, 'laplacedot', 'nu-svr') 
+```
+
+Linear kernel and laplacedot kernel both performed much better than radial did. Therefore, both of those kernels will be cross validated and then the best one will be used to make predictions. Each one of the 10 cross validated models will be used to make predictions. Then the mean prediction across all 10 folds is used to assess accuracy. 
+
+Although the linear kernel seemed to be the best from the previous analysis, laplacedot is more general and ends up over fitting less. It performs better with cross validation than the linear kernel did. This makes sense because the linear kernel would be impacted more by multicollinearity. The optimal cost from the tuning algorithm is passed into the cross validation scheme. 
+
+```{r SVM_continued , echo=TRUE}
+
+N <- nrow(svmFrame)
+
+kfolds <- 10
+set.seed(5948)
+
+holdout <- split(sample(1:N), 1:kfolds)
+Id <- 1:nrow(svmTestFrame)
+SVMaggs <- data.frame(Id)
+AllResultsSVM <- c()
+for (k in 1:kfolds) {
+  
+  ksvmModel <- quiet(ksvm(x = targetValue ~ . , data = svmFrame[-holdout[[k]],]
+                          , kernel = "vanilladot"
+                          , C = fineCost[1]
+                          , type = 'eps-svr'))
+  preds_ <- predict(ksvmModel,svmFrame[holdout[[k]],])
+  preds <- expm1(preds_)
+  test3 <- expm1(targetValue[holdout[[k]]])
+  score3 <- rmsle(preds ,test3)
+  AllResultsSVM <- c(AllResultsSVM,score3)
+}
+
+boxplot(AllResultsSVM)
+mean(AllResultsSVM)
+
+N <- nrow(svmFrame)
+
+kfolds <- 10
+set.seed(5948)
+
+holdout <- split(sample(1:N), 1:kfolds)
+Id <- 1:nrow(svmTestFrame)
+SVMaggs <- data.frame(Id)
+AllResultsSVM <- c()
+for (k in 1:kfolds) {
+
+  ksvmModel <- quiet(ksvm(x = targetValue ~ . , data = svmFrame[-holdout[[k]],]
+                          , kernel = "laplacedot"
+                          , C = (fineCostype_2[1])
+                          , type = 'nu-svr'))
+  preds_ <- predict(ksvmModel,svmFrame[holdout[[k]],])
+  preds <- expm1(preds_)
+  test3 <- expm1(targetValue[holdout[[k]]])
+  score3 <- rmsle(preds ,test3)
+  AllResultsSVM <- c(AllResultsSVM,score3)
+  
+  kagPreds <- predict(ksvmModel ,svmTestFrame)
+  newCol <- expm1(kagPreds)
+  SVMaggs <- cbind(SVMaggs , newCol)
+}
+
+boxplot(AllResultsSVM)
+mean(AllResultsSVM)
+```
+
+
+Predictions on the Kaggle testing data are made and averaged across all folds. They are then stored into a data frame that will later be used. 
+
+
+```{r SVM_results , echo=TRUE}
+SVMaggs_sub <- SVMaggs[,-1]
+SVMaggs_sub$preFinal <- rowSums(SVMaggs_sub)
+SVMaggs_sub$preFinal <- (SVMaggs_sub$preFinal)/kfolds
+```
+
+
+***Decision Trees***
+
+A decision tree asks sequential questions about the data and then comes to a prediction about an observation. To make predictions for sale price 3 trees are grown. First it uses the default pruning. Then it does not prune the tree at all. Finally the tree is pruned using the optimal values from the cross validated error rate observed from the unpruned tree. This produces the best results. However, none of the results are strong enough to be used in the submission on Kaggle. For the regression models, only the default pruned tree is visualized because of the size of the other trees. 
+
+Multiple trees are also grown to try and classify which neighborhood an observation comes from. Both of these trees are visualized. 
+
+```{r Trees_ , echo=TRUE}
+treeFrame <- svmFrame
+
+#default pruning 
+tree1reg <- rpart(targetValue ~ ., treeFrame[indexes,])
+tree1regPreds <- predict(tree1reg, treeFrame[-indexes,])
+rmsle(expm1(targetValue[-indexes]), expm1(tree1regPreds))
+fancyRpartPlot(tree1reg)
+
+
+#no tuning 
+tree2 <- rpart(targetValue ~ ., treeFrame[indexes,],
+               control = rpart.control(minbucket = 1, minsplit=1, cp=-1)
+               , model = T)
+rsq.rpart(tree2)
+tree2Preds <- predict(tree2, treeFrame[-indexes,])
+rmsle(expm1(targetValue[-indexes]), expm1(tree2Preds))
+
+#optimal tuning by internal cross validation 
+tree3 <- rpart(targetValue ~ ., treeFrame[indexes,],control = rpart.control(cp=2.0627e-03)
+               , model = T)
+tree3Preds <- predict(tree3, treeFrame[-indexes,])
+rmsle(expm1(targetValue[-indexes]), expm1(tree3Preds))
+```
+
+
+To highlight an issue of data leakage and multicollinearity a decision tree is used to try and classify neighborhood. First the classification rate is around 97%. However, there is perfect multicollinearity between the median price per square foot of land and neighborhood. Once this predictor is removed the classification rate for neighborhood drops to around 50%. 
+
+
+```{r Trees_class , echo=TRUE}
+#can a tree predict neighborhood (this result is due to data leakage)
+tree1class <- rpart(Neighborhood ~ ., treeFrame[indexes,], method = 'class')
+tree1Preds <- predict(tree1class, treeFrame[-indexes,], type = 'class')
+mean(tree1Preds == treeFrame$Neighborhood[-indexes])
+fancyRpartPlot(tree1class)
+
+
+#remove data leaks and try again 
+tree1classNOLEAK <- rpart(Neighborhood ~ . - P_sf  - Price_SF_land - Price_SF_land_, 
+                          treeFrame[indexes,], method = 'class')
+tree1Preds <- predict(tree1classNOLEAK, treeFrame[-indexes,], type = 'class')
+mean(tree1Preds == treeFrame$Neighborhood[-indexes])
+fancyRpartPlot(tree1classNOLEAK)
+
+```
+
+***Clustering***
+
+Clustering groups like observations. Two main clustering algorithms are used, kmeans and hierarchical. 
+
+The data is combined and transformed into a matrix. This matrix is used for the rest of the models. Columns of the matrix with over 99.94% zeros are removed. This is because there is such low variance of that predictor that it will only negatively impact the model. Before clustering, the data is also standardized to improve accuracy. 
+
+Kmeans clustering and hierarchical clustering are both used with varying distance measures and amount of clusters. The sale price is discretized into 5 bins. These labels are then written as the row names to then easily be able to see if they are grouped together by the clustering algorithm. While 5 labels is an over simplification of the problem compared to the goal of accurately predicting the price, it is beneficial to see how the clustering algorithm decides to group observations. 
+
+
+```{r clustPreProcessing , echo=TRUE}
+#turn data into matrix 
+final_matrix <- as.matrix(cbind(acm.disjonctif(fullFrame[,cats]), fullFrame[,ints]))
+res <- colSums(final_matrix==0)/nrow(final_matrix)*100
+final_matrix <- final_matrix[,-c(which(res>99.94))]
+final_move <- final_matrix[(nrow(housingData)+1):(nrow(housingData_test)+nrow(housingData)),]
+
+
+
+newRows <- sample(length(targetValue),length(targetValue))
+targetValue <- targetValue[newRows]
+final_matrix <- final_matrix[newRows,]
+
+
+
+rf_matrix <- as.matrix(final_matrix)
+rf_final_move <- as.matrix(final_move)
+
+
+clusterMatrix <- rbind(rf_matrix,rf_final_move)
+
+for (i in 1:ncol(clusterMatrix)){
+  clusterMatrix[,i] <- standardize(clusterMatrix[,i])
+}
+```
+
+For Kmeans the elbow method is used to select potential cluster amounts. K = 3, 8, and 15 are all used. Silhouettes are then used to measure the distance within each cluster. Although kmeans intrinsically uses euclidean distance, by analyzing the clusters it creates with different distance measures it is possible to ascertain which distance measure minimizes the distance between observations in a cluster. Cosine distance seems to be the best in this regard. 
+
+
+```{r kmeans , echo=TRUE}
+#elbow method to cho0se clusters 
+fviz_nbclust(clusterMatrix, kmeans, method = "wss", k.max = 40)
+
+
+X3clust_3 <- kmeans(clusterMatrix,3)
+fviz_cluster(X3clust_3, clusterMatrix)
+
+X3clust_8 <- kmeans(clusterMatrix,8)
+fviz_cluster(X3clust_8, clusterMatrix)
+
+X3clust_15 <- kmeans(clusterMatrix,15)
+fviz_cluster(X3clust_15, clusterMatrix)
+
+sil3 <- silhouette(X3clust_3$cluster, dist(clusterMatrix))
+fviz_silhouette(sil3)
+
+
+sil8 <- silhouette(X3clust_8$cluster, dist(clusterMatrix))
+fviz_silhouette(sil8)
+
+sil8_man <- silhouette(X3clust_8$cluster, dist.matrix(clusterMatrix, method = "euclidean"))
+fviz_silhouette(sil8)
+
+sil8_man <- silhouette(X3clust_8$cluster, dist.matrix(clusterMatrix, method = "manhattan"))
+fviz_silhouette(sil8_man)
+
+#cosine distance seems to minimize the inner cluster distance 
+sil8_cos <- silhouette(X3clust_8$cluster, dist.matrix(clusterMatrix, method = "cosine"))
+fviz_silhouette(sil8_cos)
+```
+
+Principal component analysis is used to reduce the dimensionality down to 50. Subsequently, 8 clusters is repeatedly used with different distance measures, for each a dendogram is used to visualize the results. A tanglegram is used to compare the clustering results for cosine distance and euclidean distance.
+
+```{r HCLUST , echo=TRUE}
+HIGHclust <- clusterMatrix
+HIGHclust <- PCA(t(HIGHclust), ncp = 50)
+HIGHclust <-as.matrix(HIGHclust$var$coord)
+clustNames <- discretize((targetValue), breaks = 5)
+clustNames <- revalue(clustNames, c("[10.5,11.7)" = 'cheap',
+                        '[11.7,11.9)' = 'low', '[11.9,12.1)' = 'mediam' ,
+                        '[12.1,12.3)' = 'medHigh',
+                        '[12.3,13.5]' = 'high'
+                        ))
+
+
+HIGHclust <- HIGHclust[1:1460,]
+samps <- sample(1:1460,100)
+row.names(HIGHclust) <- clustNames
+
+man_dist <- as.dist(dist.matrix(as.matrix(HIGHclust[samps,]), method = "manhattan"))
+fit1 <- hclust(man_dist, method="ward.D2")
+plot(fit1, main = "Manhattan: 5 clusters", cex = .55)
+euclid_small <- cutree(fit1, k=8)
+rect.hclust(fit1, k=8, border="blue")
+
+euc_dist <- as.dist(dist.matrix(as.matrix(HIGHclust[samps,]), method = "euclidean"))
+fit2 <- hclust(euc_dist, method="ward.D2")
+plot(fit2, main = "Euclidean: 5 clusters", cex = .55)
+euclid_small <- cutree(fit2, k=8)
+rect.hclust(fit2, k=8, border="yellow")
+
+
+euc_co <- as.dist(dist.matrix(as.matrix(HIGHclust[samps,]), method = "cosine"))
+fit3 <- hclust(euc_co, method="ward.D2")
+plot(fit3, main = "Cosine: 5 clusters", cex = .55)
+euclid_small <- cutree(fit3, k=8)
+rect.hclust(fit3, k=8, border="green")
+
+
+
+#https://www.r-graph-gallery.com/340-custom-your-dendrogram-with-dendextend.html
+fit_3 <- as.dendrogram(fit2)
+fit_6 <- as.dendrogram(fit3)
+colors <- randomColor(8)
+compareCosineData <- dendlist(
+  fit_3 %>%
+    set("labels_col", value = colors, k=8) %>%
+    set("branches_lty", 1) %>%
+    set("branches_k_color", value = colors, k = 8),
+  fit_6 %>%
+    set("labels_col", value = colors, k=8) %>%
+    set("branches_lty", 1) %>%
+    set("branches_k_color", value = colors, k = 8)
+)
+tanglegram(compareCosineData, sort = TRUE,
+           common_subtrees_color_lines = TRUE, highlight_distinct_edges = TRUE
+           , highlight_branches_lwd=TRUE,
+           margin_inner=7,
+           lwd=1
+)
+```
+
+
+
+***K-Nearest Neighbor***
+
+Knn is a simple algorithm that compares an observation to those closest to it. Here, Knn is used with PCA and without PCA to demonstrate that it actually performs better without the PCA. 
+
+The algorithm is then retrained with various values of K. These results are then visualized to understand how the error rate changes with K. This model does not do as well as others in predicting sale price and is not used in the final submission on Kaggle. 
+
+
+```{r kNN , echo=TRUE}
+
+knnMatrix <- PCA(t(rf_matrix), ncp = 75)
+knnMatrix <- data.frame(knnMatrix$var$coord)
+
+knnPreds <- knn.reg(knnMatrix[indexes, ],knnMatrix[-indexes, ], targetValue[indexes], k=10)
+scoreKNN <- rmsle(expm1(knnPreds$pred) ,expm1(targetValue[-indexes]))
+scoreKNN
+
+knnMatrix <- rf_matrix
+
+nums <- c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15)
+knnResults <- c()
+for (i in nums) {
+knnPreds <- knn.reg(knnMatrix[indexes, ],knnMatrix[-indexes, ], targetValue[indexes], k=i)
+scoreKNN <- rmsle(expm1(knnPreds$pred) ,expm1(targetValue[-indexes]))
+knnResults[i] <- scoreKNN
+print(paste(scoreKNN, i))
+}
+
+knnViz <- data.frame(nums,knnResults)
+
+
+plot(knnViz$nums, knnViz$knnResults)
+```
+
+
+***Random Forest***
+
+A random forest is an ensemble method. It uses many trees to make a prediction by committee. First the algorithm is tuned to test multiple values of mtry, the number of observations tried at each split. The random forest is then trained using a holdout set and then tested. A random forest is then retrained with all the data and predictions are made on the Kaggle testing set. Random Forest Explainer is then used to analyze the random forest. It shows which variables were selected most and at what position in the tree. Being one of the better models its predictions are used in the Kaggle submission. Although the tuning shows that mtry of 142 is better, an mtry of 72 will be able to generalize better and it is therefore the mtry of choice. 
+
+
+```{r randomForest , echo=TRUE}
+tuneRF(rf_matrix, targetValue)
+rf2 <- randomForest(rf_matrix, targetValue, mtry = 72)
+rfPreds <- predict(rf2, rf_final_move)
+
+
+rf2 <- randomForest(rf_matrix[indexes,], targetValue[indexes])
+rfPreds <- predict(rf2, rf_matrix[-indexes,])
+rmsle(expm1(rfPreds), expm1(targetValue[-indexes]))
+
+
+rf2 <- randomForest(rf_matrix[,], targetValue)
+rfPreds <- predict(rf2, rf_final_move[,])
+
+
+min_depth_frame <- min_depth_distribution(rf2)
+plot_min_depth_distribution(min_depth_frame)
+
+importance_frame <- measure_importance(rf2)
+plot_multi_way_importance(importance_frame, size_measure = "no_of_nodes")
+```
+
+***XGBoost***
+
+Extreme Gradient Boosting is also a tree based ensemble algorithm. It was tuned through trial and error. A small learning rate of .0095 combined with many rounds of training, 4,250, yielded the best cross validated results. Alpha and lambda are both set above zero to help the model be more general and prevent over fitting. Col sample by tree and sub sample are set below one so not all data is available for every tree. This also helps reduce over fitting. 5 models are built with a cross validation scheme and all make predictions for Kaggle. The mean prediction is taken among the 5 and stored for later use. This is the strongest model of all attempted. 
+
+```{r XGBoost , echo=TRUE}
+N <- nrow(rf_matrix)
+kfolds <- 5
+set.seed(5948)
+rf_matrixPCA <- rf_matrix
+holdout <- split(sample(1:N), 1:kfolds)
+Id <- 1:nrow(final_move)
+XGaggs <- data.frame(Id)
+AllResults <- c()
+AllModels <- c()
+for (k in 1:kfolds) {
+  Test <- rf_matrix[holdout[[k]], ]
+  targsTest <- targetValue[holdout[[k]]]
+  Train <- rf_matrix[-holdout[[k]], ]
+  targsTrain <- targetValue[-holdout[[k]]]
+  xg <- xgboost::xgboost(objective = 'reg:squarederror', eval_metric = 'rmsle',
+                data = Train, label = targsTrain
+                , eta=.0095,nrounds=4250,
+                max_depth=3, min_child_weight=1.5,
+                subsample=.4,
+                colsample_bytree=.7,
+                reg_alpha = .2,
+                reg_lambda = 0.2,
+                verbose = F)
+  logPreds3 <- predict(xg, Test )
+  preds <- expm1(logPreds3)
+  test3 <- expm1(targsTest)
+  score3 <- rmsle(preds ,test3)
+  AllResults <- c(AllResults,score3)
+  kagPreds <- predict(xg ,rf_final_move)
+  newCol <- expm1(kagPreds)
+  XGaggs <- cbind(XGaggs , newCol)
+}
+XGaggs_sub <- XGaggs[,-1]
+XGaggs_sub$preFinal <- rowSums(XGaggs_sub)
+XGaggs_sub$preFinal <- (XGaggs_sub$preFinal)/kfolds
+
+mean(AllResults)
+```
+
+
+***LASSO***
+
+Lasso, or least absolute shrinkage and selection operator regression is a great model for this problem because of how to handles multicollinearity. The word shrinkage comes from the idea that certain predictors will be shrunk down to make the model more general. This is the exact problem with this data set so this model is a good choice. To help with the normality assumption of the model logs are taken of each predictor. Although this is brute force transformation it helped the accuracy of the model. The model is built and tested with a holdout data set. It is then retrained with all the training data and predictions are made on the Kaggle testing set. Using trial and error an alpha of .3 and a lambda of .01 were selected for the model. 
+
+```{r LASSO , echo=TRUE}
+#Take log of all predictors (improved accuracy)  
+for (i in 1:ncol(rf_matrix)) {
+    rf_matrix[,i] <- log1p(rf_matrix[,i])
+}
+
+#Take log of all predictors (improved accuracy)  
+for (i in 1:ncol(rf_final_move)) {
+  rf_final_move[,i] <- log1p(rf_final_move[,i])
+}
+
+
+#build model and calculate error rate 
+lasso_model_ <- glmnet(rf_matrix[indexes,], targetValue[indexes], alpha = .3, lambda = .01, standardize = TRUE)
+predsLas_ <- predict(lasso_model_, rf_matrix[-indexes,])
+rmsle(expm1(predsLas_), expm1(targetValue[-indexes]))
+
+
+
+#make predictions for the Kaggle testing data 
+lasso_model <- glmnet(rf_matrix, targetValue, alpha = .3, lambda = .01, standardize = TRUE)
+predsLas <- predict(lasso_model, rf_final_move)
+predsLas <- expm1(predsLas)
+```
+
+***Blending*** 
+
+Simply making predictions with the model with the lowest error does not translate to the best possible results. Combining a few of the better models makes for better predictions on Kaggle. The SVM, XGBoost, Random Forest, and Lasso regression models are all used. A weight of .275, .7, -.15, and .175 are used on the models respectively. This drastically improved the score to an rmsle of .1208 and placed these predictions in the top 10% of all submissions on Kaggle for this competition. 
+
+However, there was a lot of trial and error used to tune the weights. A better way would potentially be leaving out roughly 15% of the data for the entire script and then use a linear regression to calculate the weights. Although that would improve these results even more this is still a large improvement from any individual model. 
+
+
+```{r Blending , echo=TRUE}
+
+#build a data frame of predictions from the 4 best models 
+dfBlend <- data.frame(log1p(SVMaggs_sub$preFinal),log1p(XGaggs_sub$preFinal),rfPreds, log1p(predsLas))
+colnames(dfBlend) <- c("svm", "xgboost", "randomForest", "lass")
+
+#view distribution of each models predictions
+hist(dfBlend[,1]) #solid
+hist(dfBlend[,2]) #best model 
+hist(dfBlend[,3]) #negative weight seems to be the best 
+hist(dfBlend[,4]) #solid 
+
+#combine all predictions with the given weights 
+trythis <- (.275*dfBlend[,1] + .7*dfBlend[,2] +  -.15*dfBlend[,3] + .175*dfBlend[,4])
+
+#write the predictions to a csv file for Kaggle submission 
+id <- c(1461:2919)
+subFrame <- data.frame(id, expm1(trythis))
+colnames(subFrame) <- c('Id','SalePrice')
+
+write.csv(subFrame, "/Users/ronenreouveni/Desktop/knittedFile_Finalsub.csv")
+```
+
+
+# Results 
+
+***Naive Bayes***
+
+Although Naive Bayes was used in the pre-processing stage it is important to note its impact. The largest missing value in the data set was Lot Frontage. This measure was initially filled by just taking the median value from that neighborhood. However, this was a weak method. As shown in the bubble plot visualizations some neighborhoods had large differences but others do not. Naive Bayes takes much more information into consideration in filling in missing values. One of 10 values were chosen to fill in each missing value. Using Naive Bayes to fill in missing values is an important step in improving the accuracy of the model. Lot Frontage turns out to be a significant predictor and filling in missing values as accurately as possible is what can make the difference between a competitive result and an average one. 
+
+
+***Association Rule Mining***
+
+ARM was used in a general setting and with setting housing sale price as the right hand side. Although this model was not used to make predictions on housing prices it is very useful. Association Rule Mining allows for the discovery of interesting patterns in the data set. Understanding these patterns allows for increased insight and therefore a better approach in trying to solve any data issues that my arise. 
+
+ {BsmtFinSF2=[0,7.3],  MiscVal=[0,1.55e+04]}   => {PoolArea=[0,738]} 
+
+This rule has 100% confidence. It explains that if BsmtFinSF2 and MiscVal are in the first, smallest, bucket then so will Pool Area. 
+
+The most interesting rules were found by setting the right hand side of the model to the target value, sale price. This was discretized into three buckets, low, medium, and high. These represent a cost for a home. The following are 4 of the most interesting rules. All of these rules have 100% confidence. 
+
+1. {MasVnrType=None, GarageType=none, TotalSf=[334,2.16e+03)} => {targs=low}
+2. {OverallQual=4, TotalBsmtSF=[0,861), FullBath=1} => {targs=low}
+3. {LotFrontage=[4.38,5.75], HeatingQC=Ex, GrLivArea=[1.66e+03,5.64e+03],Sf_Quality=[7.25e+26,1.11e+37]}  => {targs=high}
+4. {Neighborhood=NridgHt, MasVnrArea=[4.55,7.38], TotalSf=[2.82e+03,1.18e+04]} => {targs=high}
+
+
+The first rule explains that with 100% confidence and support of .037, every property between 334 and 2,160 square feet with no mosaic veneer or garage will be a low value home. 
+
+The second rule asserts that with 100% confidence and support of .037, every property with an over quality of 4, small to no basement, and only one above ground full bathroom will also have a low value. 
+
+The third rule is interesting because with 100% confidence and support of .098, every property with LotFrontage log value between 4.38 and 5.75, a relatively large general living area and a high sf quality will mean a high value home. 
+
+Finally, the fourth rule brings in mosaic veneer area, NridgHt neighborhood, and large TotalSf. It says that again, with 100% confidence and support of .039, all of these properties will have a high value. 
+
+The reason these rules are important is because it helps illuminate that there is a consistent pattern as to what makes a property high, medium, or low valued. There are no exceptions to these rules because they all have a confidence of 100%. 
+
+
+***Support Vector Regression***
+
+The custom build tuning algorithm yielded very interesting results. The radial kernel performed the worst and the vanilladot, linear kernel, and laplacedot were similar enough to warrant further investigation. The best cost associated with the linear kernel was about .022 and an error rate of .119. The radial kernel could only achieve an error rate of .13 with a cost of about 1.5. The laplacedot kernel had an error rate of just under .123 with a cost of about 18. Multiple regression types were tested with laplacedot and nu-svr was the best. Although at first glance the linear kernel is much better than the laplacedot cross validation is needed to verify this. Due to the multicollinearity issues, the linear kernel will be more susceptible to these issues than the laplacedot kernel. With cross validation, the linear kernel performed with an error rate of .132 and the laplacedot kernel had an error rate of .127. The laplacedot kernel is able to better generalize this specific data. It is the kernel of choice for making predictions on the Kaggle data set. This can also be seen in the box plots of the error rates for each kernels predictions. The linear kernel and laplacedot kernel have some folds with an error rate of under .1. However, the worst model with laplacedot is .18 while the worst linear kernel model was .25. Each model in the 10 fold cross validation scheme with the laplacedot kernel was used to make predictions on the Kaggle testing set. The average is taken of all these 10 predictions and saved for later use as the final SVM prediction. 
+
+
+***Decision Trees***
+
+For predicting sale price, three different trees were grown. The first used default pruning and it had an error rate of .1966. This is the baseline tree and subsequent trees will be compared to this. An error of .1966 is not strong enough to warrant use in the Kaggle submission. Next, a tree with pruning turned off is grown. As expected, the error rate drops to just above .2. This is still a worthwhile experiment because it allows for tuning CP. This parameter is the complexity parameter and it is used to stop growing the tree. The cross validated error seems to be minimized at cp of 2.0627e-03. The corresponding error rate is .187. A nice improvement from the default pruning error rate of .1966 but still not good enough to be used for predictions. 
+
+Decision Trees were also used to highlight a data leakage and multicollinearity issue. A tree was grown in order to predict what neighborhood an observation falls into. The error rate is initially nearly 99%. However, the feature engineering created a feature that has perfect multicollinearity with neighborhood. It was price_sf_land. It came from taking median value for each neighborhood that could then be scaled and used in other interactions. Once this is removed the accuracy for predicting neighborhood falls to under 50%. This makes sense because while some neighborhoods are very different, most are very similar. This was also evident from the bubble plot of sale price by neighborhood. 
+
+
+***Clustering***
+
+Kmeans: 
+
+Clustering was used to try and understand if similar priced homes could be grouped together. Kmeans is initially used without sale price. This is to see if observations could be separated and grouped based on only the predictors. The elbow method is used to select values for K. K = 3, 8 and 15 were all tested. Based on the silhouette results this does not seem to be possible. Kmeans intrinsically uses euclidean distance for its calculations. However, once it creates its clusters different distance measures can be used to measure the average silhouette width. Whichever distance measure minimizes this value will probably be the best distance measure to use. Cosine distance seemed to do the best, this makes sense because it is the best at handling high dimensionality. 
+
+Hierarchical:
+ 
+Sale price was discretized into 5 bins, cheap, low, medium, medHigh, and high. An observations row name is then replaced with the appropriate price category. This allows for a very easy analysis of the dendrogram. Principal component analysis is used to lower the dimensionality down to 50 observations. A dendrogram is made using 5 clusters and euclidean, Manhattan, and cosine distance measures. The goal is to see if the clustering algorithm can group observations with the same price bucket together. While there were some observations grouped correctly together clustering did not do a good job of this. Furthermore, splitting homes into 5 bins is an oversimplification and even with this clustering could not consistently cluster them together. Finally, a tanglegram is used to compare the clusters of two different distance measures, euclidean and cosine. The fact that the web is so messy indicates that there are not consistent clusterings between these two models. 
+
+
+***K-Nearest Neighbor***
+
+Knn can be used in regression problems as well as classification ones. PCA was also used here but it did not improve the model. With PCA reducing the dimensionality down to 75 predictors and k = 10 the error rate is .24. This is the worst error rate so far. The corresponding error rate with k = 10 and no PCA is .197, a large improvement. A for loop is then run to test each K between 1 and 15. The values for K and their respective error rates are graphed to visualize how the error rate changes with K. The error rate is minimized with a K of 4 and an error rate of .1943. This is not accurate enough to use in the final submission to Kaggle. 
+
+***Random Forest***
+
+The random forest is first tuned to find the optimal value of mtry. Although the tuning algorithm says that the best mtry is 143 this makes the model less generalized. When making submissions to Kaggle 72 is actually better because it is more general. The random forest has an error rate of about .128. This is a relatively strong error rate compared to other models. The random forest visualizations show which predictors were set as the root more often. It shows that the top 3 most important predictors were TotalSf, Sf_Quality, and P_sf. All three of these values were engineered. This is very encouraging because it highlights that the engineered features are adding a tremendous amount of value. These are the predictors that on average reduce the most noise in the data set. The model is retrained on all the data and predictions on the Kaggle test set are saved for later use. 
+
+***XGBoost***
+
+The XGBoost model has the strongest predictions with an average error rate of .123. Cross validation is used to test the model. The XGBoost model is trained and tested with 5 folds, each model’s predictions are averaged to then be submitted to Kaggle. This was found to be the strongest model and the most significant in predicting sale price. 
+
+***Lasso***
+
+A Lasso model was selected because it can handle multicollinearity and high dimensional data well. This was confirmed because the error rate is .132. Although this is well above the XGBoost it is strong enough to potentially be a significant predictor of sale price. This model also generalizes well and will be a stabilizing factor in the final predictions. The model is trained and tested using a simple train and test set. Finally the model is trained on all the available data and predictions are made on the Kaggle test set. 
+
+***Blending***
+
+Although XGBoost has the best error rate, combining all relevant models performs much better than the XGBoost model, or any model, individually. The four best models were all chosen to participate in the blending process. The SVM, XGBoost, Random Forest, and Lasso regression were all selected. They were given weights of .275, .7, -.15, and .175 respectively. Weights were chose by putting more emphasis on models that had better results. However, there was also a lot of trial and error. Once the weight of the random forest was set to zero, more improvements were made by reducing it further. This process can be continued, but the point of this section is show that a blended model can outperform the best model within the blending group. This blending technique places the predictions in the top 10% of all Kaggle submissions for this competition. 
+
+# Conclusion 
+
+Advancements in technology and prediction accuracy often have the power to make human predictions obsolete. This does not mean that there is no human that can make better predictions than a machine. However, majority of the time the machine will do better. Real estate markets are very often controlled by real estate agents making decisions about how much a property is worth. Allowing technology to replace this aspect can have a huge impact on this market. Not only in terms of everyday buyers and sellers benefiting but also investment firms can gain a large competitive advantage here. Having access to information that competitors do not have is an exploit that can lead to a massive advantage. 
+
+This report shows that technology can be used to achieve this competitive advantage. If a firm has the ability to check housing prices with a model then they can compare those predictions with what properties are listed at. It would be simple to purchase properties that the model predicts are worth more than what the listed price is. If this process was repeated then an investment firm could build an entire portfolio of properties they purchased for less than what they are worth. This is a prime example of how innovative technologies and utilizing analytics could create a large competitive advantage. On a smaller scale this could be very beneficial for individual or family investors. 
+
+Peoples’ homes are often their highest valued asset. Building wealth is usually based on the value of one's home. If an average person severely overpays for their home then this will have a negative impact on their entire financial lives. A real estate agent may just be motivated to make a deal and not always care about getting the absolute best price possible. This technology could help save many people from falling into the trap of spending too much on a home or selling their home for too little. A system that can accurately predict the sale price of home has the potential to drastically alter the way real estate markets function. Who has access to this technology will decide who benefits and who does not. 
